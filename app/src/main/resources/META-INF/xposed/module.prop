@@ -1,0 +1,9 @@
+name=SMZDMPurify
+version=1.0
+versionCode=1
+description=什么值得买净化：去广告、百亿补贴红包评论屏蔽、底栏精简、我的页面精简 (API 102)
+minApiVersion=102
+targetApiVersion=102
+staticScope=false
+exceptionMode=protective
+autoHotReload=false

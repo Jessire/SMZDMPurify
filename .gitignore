@@ -1,0 +1,11 @@
+.gradle/
+build/
+app/build/
+local.properties
+work/
+*.apk
+*.idsig
+$null
+work_screen_28k.png
+PROJECT_STATE.md
+AGENTS.md
