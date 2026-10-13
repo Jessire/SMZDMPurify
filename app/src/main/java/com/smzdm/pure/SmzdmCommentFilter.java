@@ -707,13 +707,21 @@ public final class SmzdmCommentFilter {
                     "}" +
                 "}" +
             "}" +
-            "function waitFirstPoolItem(pool,timeoutMs){" +
-                "if(pool.list.length>0||pool.hotExhausted)return Promise.resolve();" +
+            "function hasNonTopPoolItem(pool,topIds){" +
+                "if(!topIds)return pool.list.length>0;" +
+                "for(var i=0;i<pool.list.length;i++){" +
+                    "var cid=String(pool.list[i].comment_id||'');" +
+                    "if(cid&&!topIds[cid])return true;" +
+                "}" +
+                "return false;" +
+            "}" +
+            "function waitFirstPoolItem(pool,topIds,timeoutMs){" +
+                "if(hasNonTopPoolItem(pool,topIds)||pool.hotExhausted)return Promise.resolve();" +
                 "return new Promise(function(resolve){" +
                     "var done=false;" +
                     "var fin=function(){if(done)return;done=true;resolve();};" +
                     "pool.firstWaiters.push(fin);" +
-                    "setTimeout(fin,timeoutMs||1800);" +
+                    "setTimeout(fin,timeoutMs||2200);" +
                 "});" +
             "}" +
             "function triggerHotAutoRefresh(pool){" +
@@ -728,9 +736,18 @@ public final class SmzdmCommentFilter {
                         "if(pool.list.length<=dc2)return;" +
                         "if(typeof window.COMMENT_FUNC_LOAD_LIST==='function'){try{window.COMMENT_FUNC_LOAD_LIST('top');return;}catch(e){}}" +
                         "var tabs=document.querySelectorAll('.comment-sort-container div, .comment-main-header-right span, .comment-order span, .comment-sort span');" +
+                        "var hotTab=null,otherTab=null;" +
                         "for(var i=0;i<tabs.length;i++){" +
                             "var t=(tabs[i].textContent||'').trim();" +
-                            "if(t==='精彩'){try{tabs[i].click();return;}catch(e){}}" +
+                            "if(t==='精彩'){hotTab=tabs[i];}else if(t==='最早'||t==='最晚'){if(!otherTab)otherTab=tabs[i];}" +
+                        "}" +
+                        "if(hotTab){" +
+                            "if(hotTab.classList.contains('active')||hotTab.classList.contains('selected')||hotTab.classList.contains('cur')||hotTab.getAttribute('aria-selected')==='true'){" +
+                                "if(otherTab){try{otherTab.click();setTimeout(function(){try{hotTab.click();}catch(e){}},100);}catch(e){try{hotTab.click();}catch(e2){}}}" +
+                                "else{try{hotTab.click();}catch(e){}}" +
+                            "}else{" +
+                                "try{hotTab.click();}catch(e){}" +
+                            "}" +
                         "}" +
                     "},220);" +
                 "}catch(e){}" +
@@ -891,13 +908,13 @@ public final class SmzdmCommentFilter {
                         "d.rows=pool.list.slice();d.next_page=0;d.next_has_fold_comment=0;return JSON.stringify(obj);" +
                     "}" +
                     "harvestHotPool(xhr,params,pool);" +
-                    "if(kept.length===0&&(!Array.isArray(d.top)||d.top.length===0)){" +
-                        "await waitFirstPoolItem(pool,2200);" +
+                    "var topIds2={};if(Array.isArray(d.top)){for(var tI2=0;tI2<d.top.length;tI2++){if(d.top[tI2]&&d.top[tI2].comment_id)topIds2[String(d.top[tI2].comment_id)]=1;}}" +
+                    "if(kept.length===0){" +
+                        "await waitFirstPoolItem(pool,topIds2,2200);" +
                     "}" +
                     "var initialRows=pool.list.slice();" +
                     "pool.delivered={};" +
                     "for(var iIdx=0;iIdx<initialRows.length;iIdx++){if(initialRows[iIdx].comment_id)pool.delivered[String(initialRows[iIdx].comment_id)]=1;}" +
-                    "var topIds2={};if(Array.isArray(d.top)){for(var tI2=0;tI2<d.top.length;tI2++){if(d.top[tI2]&&d.top[tI2].comment_id)topIds2[String(d.top[tI2].comment_id)]=1;}}" +
                     "d.rows=initialRows.filter(function(it){return !topIds2[String(it.comment_id||'')];});" +
                     "if(pool.hotExhausted){d.next_page=0;d.next_has_fold_comment=0;}" +
                     "return JSON.stringify(obj);" +
