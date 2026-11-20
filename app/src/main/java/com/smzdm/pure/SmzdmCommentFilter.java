@@ -15,6 +15,12 @@ public final class SmzdmCommentFilter {
     private static final String TAG = "SMZDMPure";
     public static final String MARKER = "__SMZDM_PURE_COMMENT_FILTER__";
 
+    // Host 11.1.95: CommentItemBean.isAiGCComment() checks comment_type == "16".
+    private static final String AIGC_COMMENT_TYPE = "16";
+    private static final String ZHANG_DAMA_NAME = "张大妈";
+    private static final String ZHANG_DAMA_BOT_NAME = "张大妈机器人";
+    private static final Pattern AUTHOR_NAME_EDGE_SPACE = Pattern.compile("^[\\s\\p{Z}\\uFEFF]+|[\\s\\p{Z}\\uFEFF]+$");
+
     private static final Pattern HTML_TAG_PATTERN = Pattern.compile("<[^>]*>");
     private static final Pattern EMOTION_BRACKET_PATTERN = Pattern.compile("\\[[^\\[\\]]{1,8}\\]");
     private static final Pattern WHITESPACE_PATTERN = Pattern.compile("[\\s\\u00A0\\u200B-\\u200D\\uFEFF]+");
@@ -334,8 +340,21 @@ public final class SmzdmCommentFilter {
         }
     }
 
+    private static boolean isBotAuthorName(Object value) {
+        if (!(value instanceof String)) return false;
+        String name = AUTHOR_NAME_EDGE_SPACE.matcher((String) value).replaceAll("");
+        return ZHANG_DAMA_NAME.equals(name) || ZHANG_DAMA_BOT_NAME.equals(name);
+    }
+
     public static boolean isSpamCommentItemBean(Object item) {
         if (item == null) return false;
+        Object commentType = ReflectUtils.getField(item, "comment_type");
+        Object displayName = ReflectUtils.getField(item, "display_name");
+        if (AIGC_COMMENT_TYPE.equals(commentType)
+                || (commentType instanceof Number && ((Number) commentType).doubleValue() == 16)
+                || isBotAuthorName(displayName)) {
+            return true;
+        }
         String content = null;
         Object cObj = ReflectUtils.getField(item, "content");
         if (cObj instanceof String && !((String) cObj).isEmpty()) {
@@ -623,6 +642,14 @@ public final class SmzdmCommentFilter {
                 "if(!hasImg&&len<=12&&TXT_SHORT_SPAM.test(t))return true;" +
                 "return false;" +
             "}" +
+            "function isBotAuthorName(value){" +
+                "if(typeof value!=='string')return false;var name=value.trim();" +
+                "return name==='" + ZHANG_DAMA_NAME + "'||name==='" + ZHANG_DAMA_BOT_NAME + "';" +
+            "}" +
+            "function isBotItem(item){" +
+                "return item.comment_type==='" + AIGC_COMMENT_TYPE + "'||item.comment_type===" + AIGC_COMMENT_TYPE +
+                    "||isBotAuthorName(item.display_name);" +
+            "}" +
             "function isSpamItem(item){" +
                 "if(!item||typeof item!=='object')return false;" +
                 "var raw=item.content||item.article_content||'';" +
@@ -630,7 +657,7 @@ public final class SmzdmCommentFilter {
                 "var hasImg=Boolean(img&&(img.url||img.original_url));" +
                 "var w=img?Number(img.width||0):0;" +
                 "var h=img?Number(img.height||0):0;" +
-                "var res=isSpam(raw,hasImg,w,h);" +
+                "var res=isBotItem(item)||isSpam(raw,hasImg,w,h);" +
                 "if(res&&item.comment_id){spamIdMap[String(item.comment_id)]=1;}" +
                 "else if(!res&&typeof item.content==='string'&&item.content.length>=30){" +
                     "var sc=stripLeadCode(cleanText(item.content));" +
@@ -646,7 +673,7 @@ public final class SmzdmCommentFilter {
                     "if(!r||isSpamItem(r))continue;" +
                     "if(Array.isArray(r.child_list)&&r.child_list.length>0){" +
                         "var before=r.child_list.length;" +
-                        "r.child_list=r.child_list.filter(function(c){return !isSpamItem(c);});" +
+                        "r.child_list=filterRowList(r.child_list);" +
                         "var removed=before-r.child_list.length;" +
                         "if(removed>0){" +
                             "var ct=Number(r.child_total||before);" +
@@ -1010,7 +1037,7 @@ public final class SmzdmCommentFilter {
                 "}catch(e){}" +
             "}" +
             "function installStyle(){" +
-                "try{if(document.getElementById('__smzdm_pure_style'))return;var st=document.createElement('style');st.id='__smzdm_pure_style';st.textContent='.ai-product-intro-wrapper,[class*=\"ai-product-intro\"],[class*=\"ai_product_introduction\"],[module-key=\"ai_product_introduction\"],[data-module-key=\"ai_product_introduction\"],.red-packet,.lifeRed,.app-wiki-info-card,.wiki-info-card,[data-v-7b919764],[data-v-83bb4800],[data-v-d79df87b],[data-v-c0982931],.comment-main-list-loading{display:none !important;}';var head=document.head||document.documentElement;if(head)head.appendChild(st);}catch(e){}" +
+                "try{if(document.getElementById('__smzdm_pure_style'))return;var st=document.createElement('style');st.id='__smzdm_pure_style';st.textContent='.ai-product-intro-wrapper,[class*=\"ai-product-intro\"],[class*=\"ai_product_introduction\"],[module-key=\"ai_product_introduction\"],[data-module-key=\"ai_product_introduction\"],.red-packet,.lifeRed,.app-wiki-info-card,.wiki-info-card,[data-v-7b919764],[data-v-83bb4800],[data-v-d79df87b],[data-v-c0982931],.comment-main-list-loading,.comment-main-list-item[data-smzdm-pure-bot-author],.comment-main-list-reply-item[data-smzdm-pure-bot-author]{display:none !important;}';var head=document.head||document.documentElement;if(head)head.appendChild(st);}catch(e){}" +
             "}" +
             "function hideAiIntro(){" +
                 "var nodes=document.querySelectorAll('.ai-product-intro-wrapper,[class*=\"ai-product-intro\"],[module-key=\"ai_product_introduction\"],[data-module-key=\"ai_product_introduction\"],[class*=\"ai_product_introduction\"],.red-packet,.lifeRed,.app-wiki-info-card,.wiki-info-card,[data-v-7b919764],[data-v-83bb4800],[data-v-d79df87b],[data-v-c0982931]');" +
@@ -1035,15 +1062,38 @@ public final class SmzdmCommentFilter {
                 "var s=String((img.currentSrc||img.src||img.getAttribute('data-src')||img.getAttribute('data-original')||'')+' '+(img.alt||'')+' '+(img.className||'')).toLowerCase();" +
                 "return s.indexOf('pinduoduo')!==-1||s.indexOf('yangkeduo')!==-1||s.indexOf('pdd')!==-1||s.indexOf('redpacket')!==-1||s.indexOf('red_packet')!==-1||s.indexOf('share')!==-1||s.indexOf('红包')!==-1||s.indexOf('助力')!==-1||s.indexOf('拼团')!==-1;" +
             "}" +
+            // Only look at a dedicated name node owned by this comment, not quoted text or reply targets.
+            "var COMMENT_ROW='.comment-main-list-item,.comment-main-list-reply-item';" +
+            "var AUTHOR_NAME='.comment-main-list-item-content-name,.comment-main-list-item-user-name," +
+                ".comment-main-list-item-content-user-name,.comment-main-list-item-content-nickname," +
+                ".comment-main-list-reply-item-name,.comment-main-list-reply-item-user-name,'+" +
+                "'.comment-main-list-item-author-name,.comment-main-list-reply-item-author-name,[data-comment-author-name]';" +
+            "var NON_AUTHOR='.comment-main-list-item-content-comment,.comment-main-list-item-reply-name," +
+                ".comment-main-list-reply-item-receive-name,.comment-main-list-item-content-receive-name,[data-comment-reply-target]';" +
+            "var BOT_AUTHOR_HIDDEN='data-smzdm-pure-bot-author';" +
+            "function ownNodes(row,selector){" +
+                "return Array.prototype.filter.call(row.querySelectorAll(selector),function(node){" +
+                    "return node.closest(COMMENT_ROW)===row;" +
+                "});" +
+            "}" +
+            "function updateBotAuthorVisibility(row){" +
+                "var names=ownNodes(row,AUTHOR_NAME);" +
+                "var hide=names.some(function(node){return !node.closest(NON_AUTHOR)&&isBotAuthorName(node.textContent);});" +
+                "if(hide&&!row.hasAttribute(BOT_AUTHOR_HIDDEN))row.setAttribute(BOT_AUTHOR_HIDDEN,'');" +
+                "else if(!hide&&row.hasAttribute(BOT_AUTHOR_HIDDEN))row.removeAttribute(BOT_AUTHOR_HIDDEN);" +
+                "return hide;" +
+            "}" +
             "function hideItem(el,isReply){" +
-                "if(!el||isHidden(el))return;" +
-                "var cid=el.getAttribute&&el.getAttribute('comment-id');" +
+                "if(updateBotAuthorVisibility(el)||isHidden(el))return;" +
+                "var cid=el.getAttribute('comment-id');" +
                 "if(cid&&spamIdMap[String(cid)]){el.style.setProperty('display','none','important');return;}" +
-                "var block=el.querySelector('.comment-content')||el;" +
-                "var txtEl=block.querySelector('.comment-main-list-item-content-comment');" +
-                "var imgs=block.querySelectorAll(isReply?'.comment-main-list-item-content-image.child img':'.comment-main-list-item-content-image:not(.child) img');" +
+                "var txtEl=ownNodes(el,'.comment-main-list-item-content-comment')[0];" +
+                "var imgs=ownNodes(el,isReply?'.comment-main-list-item-content-image.child img':'.comment-main-list-item-content-image:not(.child) img');" +
+                // An incomplete row may gain its text in a later render; don't hide it for empty text yet.
+                "if(!txtEl&&!imgs.length)return;" +
                 "var imgEl=imgs.length?imgs[0]:null;" +
                 "var raw=txtEl?txtEl.textContent:'';" +
+                "if(!raw.trim()&&!imgs.length)return;" +
                 "if(isReply&&raw.indexOf('：')!==-1){raw=raw.substring(raw.indexOf('：')+1);}" +
                 "var hasImg=imgs.length>0;" +
                 "var shareImg=false;" +
@@ -1063,7 +1113,7 @@ public final class SmzdmCommentFilter {
             "function schedule(){if(queued)return;queued=true;var run=function(){queued=false;try{scan();}catch(e){}};if(typeof requestAnimationFrame==='function')requestAnimationFrame(run);else setTimeout(run,16);}" +
             "function start(){" +
                 "installStyle();schedule();" +
-                "if(typeof MutationObserver!=='undefined'){var mo=new MutationObserver(schedule);try{mo.observe(document.documentElement||document,{childList:true,subtree:true,attributes:true,attributeFilter:['module-key']});}catch(e){}}" +
+                "if(typeof MutationObserver!=='undefined'){var mo=new MutationObserver(schedule);try{mo.observe(document.documentElement||document,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['module-key','class','comment-id','data-comment-author-name','data-comment-reply-target']});}catch(e){}}" +
                 "window.addEventListener('scroll',schedule,true);" +
                 "document.addEventListener('DOMContentLoaded',schedule);" +
                 "try{window.addEventListener('load',schedule);setInterval(schedule,1200);}catch(e){}" +

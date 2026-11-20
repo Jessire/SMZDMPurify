@@ -2,7 +2,12 @@ package com.smzdm.pure;
 
 import android.util.Log;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -68,13 +73,11 @@ public final class SmzdmAdPurifier {
             ReflectUtils.hookAllMethods(xposed, welcomeClass, "E7", skipSplashHooker);
         }
 
-        // 2. Hot splash, interstitial, update & operation popup dialogs
+        installMarketingPopupHooks(xposed, cl);
+
+        // Keep the existing, separate splash/interstitial ad hooks.
         String[] blockedDialogClasses = new String[]{
                 "com.smzdm.client.android.module.splash.SplashScreenAnimDialogFragment",
-                "com.smzdm.client.android.app.Home11140NewGuideDialogFragment",
-                "com.smzdm.client.android.view.dialog.YunyingDialogFragment",
-                "com.smzdm.client.android.module.mine.fragment.UpdateDialogFragment",
-                "com.smzdm.client.android.view.dialog.InviteRewardDialog",
                 "com.smzdm.client.android.module.ad.InterstitialAdDialog"
         };
         for (String dlgName : blockedDialogClasses) {
@@ -83,15 +86,6 @@ public final class SmzdmAdPurifier {
                 ReflectUtils.hookMethodNoOp(xposed, dlgClass, "show", null);
                 ReflectUtils.hookMethodNoOp(xposed, dlgClass, "showNow", null);
                 ReflectUtils.hookMethodNoOp(xposed, dlgClass, "t9", null);
-            }
-        }
-
-        // 3. HomeActivity popup & floating widget triggers
-        Class<?> homeActClass = ReflectUtils.findClass("com.smzdm.client.android.app.HomeActivity", cl);
-        if (homeActClass != null) {
-            String[] noOpHomeMethods = new String[]{"F9", "z9", "M8", "U3", "d5", "b9", "m9"};
-            for (String mName : noOpHomeMethods) {
-                ReflectUtils.hookMethodNoOp(xposed, homeActClass, mName, null);
             }
         }
 
@@ -165,81 +159,43 @@ public final class SmzdmAdPurifier {
             ReflectUtils.hookAllMethods(xposed, compListClass, "convert", compListHooker);
         }
 
-        Class<?> homeRecFragClass = ReflectUtils.findClass("com.smzdm.client.android.app.recommend.HomeRecFragment", cl);
-        if (homeRecFragClass == null) {
-            homeRecFragClass = ReflectUtils.findClass("t5.ViewOnClickListenerC0576A", cl);
-        }
-        if (homeRecFragClass != null) {
-            XposedInterface.Hooker bindListHooker = chain -> {
-                Object arg0 = chain.getArg(0);
-                Object arg1 = chain.getArg(1);
-                if (arg0 instanceof List<?>) {
-                    List<?> list = (List<?>) arg0;
-                    int filterIdx = arg1 instanceof Integer ? (Integer) arg1 : -1;
-                    int idx = 0;
-                    Iterator<?> it = list.iterator();
-                    while (it.hasNext()) {
-                        Object row = it.next();
-                        if (isAdFeedRow(row)) {
-                            it.remove();
-                            if (filterIdx > 0 && idx < filterIdx) {
-                                filterIdx--;
-                            }
-                        }
-                        idx++;
+        // Legacy Home recommendation: clean before binding and remap the original filter boundary.
+        for (String name : new String[]{"com.smzdm.client.android.app.recommend.HomeRecFragment", "t5.A"}) {
+            Class<?> fragment = ReflectUtils.findClass(name, cl);
+            if (fragment == null) continue;
+            for (String method : new String[]{"J3", "D6"}) {
+                ReflectUtils.hookAllMethods(xposed, fragment, method, chain -> {
+                    Object[] args = chain.getArgs().toArray();
+                    if (args.length != 6 || !(args[0] instanceof List<?>)
+                            || !(args[1] instanceof Integer) || !(args[2] instanceof Integer)) {
+                        return chain.proceed();
                     }
-                    if (arg1 instanceof Integer && filterIdx != (Integer) arg1) {
-                        Object[] newArgs = new Object[6];
-                        newArgs[0] = list;
-                        newArgs[1] = filterIdx;
-                        newArgs[2] = 0;
-                        newArgs[3] = chain.getArg(3);
-                        newArgs[4] = chain.getArg(4);
-                        newArgs[5] = chain.getArg(5);
-                        return chain.proceed(newArgs);
-                    }
-                }
-                return chain.proceed();
-            };
-            ReflectUtils.hookAllMethods(xposed, homeRecFragClass, "J3", bindListHooker);
-            ReflectUtils.hookAllMethods(xposed, homeRecFragClass, "D6", bindListHooker);
-            XposedInterface.Hooker listArg0Hooker = chain -> {
-                Object arg0 = chain.getArg(0);
-                if (arg0 instanceof List<?>) {
-                    filterFeedRows((List<?>) arg0);
-                }
-                return chain.proceed();
-            };
-            ReflectUtils.hookAllMethods(xposed, homeRecFragClass, "M0", listArg0Hooker);
-            ReflectUtils.hookAllMethods(xposed, homeRecFragClass, "B2", listArg0Hooker);
-            ReflectUtils.hookAllMethods(xposed, homeRecFragClass, "M1", listArg0Hooker);
+                    int boundary = (Integer) args[1];
+                    HomeRows filtered = filterHomeRows((List<?>) args[0], boundary, true);
+                    args[0] = filtered.rows;
+                    args[1] = filtered.boundary;
+                    return chain.proceed(args);
+                });
+            }
+            for (String method : new String[]{"M0", "B2", "M1", "Y5", "f5"}) {
+                ReflectUtils.hookAllMethods(xposed, fragment, method, chain -> proceedWithHomeRows(chain, 0));
+            }
         }
 
-        // 7. 11.1.95 newstyle Home recommend feed (o5.o & com.smzdm.client.android.app.recommend.b)
-        Class<?> newHomeFeedFragClass = ReflectUtils.findClass("o5.o", cl);
-        if (newHomeFeedFragClass != null) {
-            ReflectUtils.hookAllMethods(xposed, newHomeFeedFragClass, "Ca", chain -> {
-                Object arg0 = chain.getArg(0);
-                if (arg0 instanceof List<?>) {
-                    filterHomeFeedNews((List<?>) arg0);
-                    filterFeedRows((List<?>) arg0);
-                }
-                return chain.proceed();
-            });
-        }
-        Class<?> recommendAdapterClass = ReflectUtils.findClass("com.smzdm.client.android.app.recommend.b", cl);
-        if (recommendAdapterClass != null) {
-            XposedInterface.Hooker recListHooker = chain -> {
-                Object arg0 = chain.getArg(0);
-                if (arg0 instanceof List<?>) {
-                    filterHomeFeedNews((List<?>) arg0);
-                    filterFeedRows((List<?>) arg0);
-                }
-                return chain.proceed();
-            };
-            for (String m : new String[]{"K", "w", "T0"}) {
-                ReflectUtils.hookAllMethods(xposed, recommendAdapterClass, m, recListHooker);
+        // 11.1.95 recommendation adapter: replace/refresh (K, T0, C0) and legacy append (w).
+        Class<?> recommendAdapter = ReflectUtils.findClass("com.smzdm.client.android.app.recommend.b", cl);
+        if (recommendAdapter != null) {
+            for (String method : new String[]{"K", "w", "T0"}) {
+                ReflectUtils.hookAllMethods(xposed, recommendAdapter, method,
+                        chain -> proceedWithHomeRows(chain, 0));
             }
+            ReflectUtils.hookAllMethods(xposed, recommendAdapter, "C0",
+                    chain -> proceedWithHomeRows(chain, 1));
+            // o5.o.La uses the inherited Ve.c.y for new-style pagination. Ve.c is shared;
+            // leave all other adapters' invocations untouched.
+            ReflectUtils.hookMethod(xposed, recommendAdapter, "y", new Class<?>[]{List.class},
+                    chain -> recommendAdapter.isInstance(chain.getThisObject())
+                            ? proceedWithHomeRows(chain, 0) : chain.proceed());
         }
 
         // 8. Pangle (穿山甲) / third-party async feed ad injector & Holder10001
@@ -316,6 +272,49 @@ public final class SmzdmAdPurifier {
         Log.i(TAG, "SmzdmAdPurifier hooks installed.");
     }
 
+    private static void installMarketingPopupHooks(XposedInterface xposed, ClassLoader cl) {
+        // 11.1.95: this caller only starts /activity/cooperation_popup. Do not hook
+        // the clipboard dispatcher: other branches resolve product/share commands.
+        hookMarketingEntry(xposed, cl, "com.smzdm.client.base.clipboard.d", "s", "void",
+                chain -> null, String.class, android.app.Activity.class);
+
+        // /util/update is shared with app updates and other features. Intercept just
+        // the operation_float consumer, before it expands templates or loads creatives.
+        String manager = "com.smzdm.module.advertise.home.n";
+        hookMarketingEntry(xposed, cl, manager, "f", "void", chain -> {
+            if (!(chain.getArg(0) instanceof List<?>) || ((List<?>) chain.getArg(0)).isEmpty()) {
+                return chain.proceed();
+            }
+            // Keep the original no-campaign path (including its widget refresh callback).
+            return chain.proceed(new Object[]{new ArrayList<>()});
+        }, List.class);
+
+        // Both HomeActivity and MainActivity treat null as "no ad" before scheduling.
+        // Also covers old tab_dialog cache before the next config response arrives.
+        hookMarketingEntry(xposed, cl, manager, "c",
+                "com.smzdm.client.base.bean.UpdateBean$HomeDialogAdsBean", chain -> null, int.class);
+    }
+
+    private static void hookMarketingEntry(XposedInterface xposed, ClassLoader cl, String owner,
+                                           String name, String returnType,
+                                           XposedInterface.Hooker hooker, Class<?>... paramTypes) {
+        String target = owner + "#" + name;
+        try {
+            Class<?> type = Class.forName(owner, false, cl);
+            Method method = type.getDeclaredMethod(name, paramTypes);
+            if (!method.getReturnType().getName().equals(returnType)
+                    || Modifier.isStatic(method.getModifiers())) {
+                Log.w(TAG, "Marketing popup hook skipped (unexpected signature): " + target);
+                return;
+            }
+            method.setAccessible(true);
+            xposed.hook(method).intercept(hooker);
+            Log.i(TAG, "Marketing popup hook installed: " + target);
+        } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
+            Log.w(TAG, "Marketing popup hook unavailable: " + target, e);
+        }
+    }
+
     public static void filterHomeComponents(List<?> components) {
         if (components == null || components.isEmpty()) return;
         Iterator<?> it = components.iterator();
@@ -342,9 +341,10 @@ public final class SmzdmAdPurifier {
             }
             if ("list".equals(zzType)) {
                 Object contentObj = ReflectUtils.getField(comp, "zz_content");
-                if (contentObj instanceof List<?>) {
-                    filterHomeFeedNews((List<?>) contentObj);
-                    filterFeedRows((List<?>) contentObj);
+                // Retain the empty top-level list component for the host's page processing.
+                if (contentObj != null && (!(contentObj instanceof List<?>) || !sanitizeHomeChildList(
+                        comp, "zz_content", (List<?>) contentObj, newHomePath(), 0, false))) {
+                    it.remove();
                 }
             }
         }
@@ -375,49 +375,104 @@ public final class SmzdmAdPurifier {
         return title;
     }
 
-    /**
-     * Home feed mixes product/deal cards with article/news cards. Keep only items that expose
-     * product signals (price or mall) so the home feed stays shopping-oriented.
-     */
-    public static void filterHomeFeedNews(List<?> rows) {
-        if (rows == null || rows.isEmpty()) return;
-        Iterator<?> it = rows.iterator();
-        while (it.hasNext()) {
-            Object row = it.next();
-            if (row == null) continue;
-            if (!isHomeFeedRow(row)) continue;
-            String title = stringField(row, "article_title");
-            if (title.isEmpty()) {
-                title = stringField(row, "single_article_title");
-            }
-            if (title.isEmpty()) continue;
+    private static final String HOLDER_BEAN = "com.smzdm.client.android.bean.holder_bean.";
+    private static final String COMPONENT_LIST = "com.smzdm.client.android.bean.component_bean.ComponentListBean";
+    // Explicit 11.1.95 deal holders (BaseHaojiaBean family). Do not infer product identity
+    // from title, price, mall, a broad package prefix, or an entire cell_type range.
+    private static final Set<Integer> HOME_PRODUCT_CELLS = new HashSet<>(Arrays.asList(
+            20001, 20040, 21001, 21014, 21021, 21022, 21023, 21024, 21025, 21026, 21030, 21201
+    ));
+    private static final String[] HOME_CHILD_FIELDS = {"sub_rows", "rows", "zz_content"};
+    private static final int MAX_HOME_NESTING = 16;
 
-            String price = stringField(row, "article_price");
-            if (price.isEmpty()) {
-                price = stringField(row, "article_price_num");
-            }
-            boolean hasMall = hasMall(row);
-            if (price.isEmpty() && !hasMall) {
-                it.remove();
-            }
+    private static Object proceedWithHomeRows(XposedInterface.Chain chain, int listIndex) throws Throwable {
+        Object[] args = chain.getArgs().toArray();
+        if (listIndex >= args.length || !(args[listIndex] instanceof List<?>)) {
+            return chain.proceed();
+        }
+        args[listIndex] = filterHomeRows((List<?>) args[listIndex], -1, true).rows;
+        return chain.proceed(args);
+    }
+
+    static final class HomeRows {
+        final List<Object> rows;
+        final int boundary;
+
+        HomeRows(List<Object> rows, int boundary) {
+            this.rows = rows;
+            this.boundary = boundary;
         }
     }
 
-    private static boolean isHomeFeedRow(Object row) {
-        String className = row.getClass().getName();
-        return className.endsWith("FeedHolderBean") || className.startsWith("com.smzdm.client.android.bean.");
+    static HomeRows filterHomeRows(List<?> source, int boundary, boolean keepFilterControl) {
+        return filterHomeRows(source, boundary, keepFilterControl, newHomePath(), 0);
     }
 
-    private static boolean hasMall(Object row) {
-        Object mallObj = ReflectUtils.getField(row, "article_mall");
-        if (mallObj instanceof List<?>) {
-            return !((List<?>) mallObj).isEmpty();
+    private static Set<Object> newHomePath() {
+        return Collections.newSetFromMap(new IdentityHashMap<>());
+    }
+
+    private static HomeRows filterHomeRows(List<?> source, int boundary, boolean keepFilterControl,
+                                           Set<Object> path, int depth) {
+        List<Object> kept = new ArrayList<>();
+        int keptBeforeBoundary = 0;
+        int index = 0;
+        if (depth < MAX_HOME_NESTING && path.add(source)) {
+            try {
+                for (Object row : source) {
+                    if (keepHomeRow(row, keepFilterControl, path, depth)) {
+                        kept.add(row);
+                        if (index < boundary) keptBeforeBoundary++;
+                    }
+                    index++;
+                }
+            } finally {
+                path.remove(source);
+            }
         }
-        if (mallObj != null) {
+        return new HomeRows(kept, boundary < 0 ? boundary : keptBeforeBoundary);
+    }
+
+    private static boolean keepHomeRow(Object row, boolean keepFilterControl, Set<Object> path, int depth) {
+        if (row == null || !path.add(row)) return false;
+        try {
+            if (isAdFeedRow(row)) return false;
+            String name = row.getClass().getName();
+            if (COMPONENT_LIST.equals(name) && "list".equals(stringField(row, "zz_type"))) {
+                Object children = ReflectUtils.getField(row, "zz_content");
+                return children instanceof List<?> && sanitizeHomeChildList(row, "zz_content",
+                        (List<?>) children, path, depth + 1, true);
+            }
+            Object cell = ReflectUtils.getField(row, "cell_type");
+            if (!(cell instanceof Integer)) return false;
+            int type = (Integer) cell;
+            // The adapter's filter bar is a UI control, not a recommendation card.
+            if (!name.equals(HOLDER_BEAN + "Feed" + type + "Bean")
+                    || !(HOME_PRODUCT_CELLS.contains(type) || keepFilterControl && type == 20010)) {
+                return false;
+            }
+            for (String field : HOME_CHILD_FIELDS) {
+                Object children = ReflectUtils.getField(row, field);
+                if (children != null && (!(children instanceof List<?>) || !sanitizeHomeChildList(
+                        row, field, (List<?>) children, path, depth + 1, false))) {
+                    return false;
+                }
+            }
             return true;
+        } finally {
+            path.remove(row);
         }
-        String mall = stringField(row, "article_mall");
-        return !mall.isEmpty();
+    }
+
+    private static boolean sanitizeHomeChildList(Object owner, String field, List<?> original,
+                                                  Set<Object> path, int depth, boolean requireRows) {
+        List<Object> kept = filterHomeRows(original, -1, false, path, depth).rows;
+        if (requireRows && kept.isEmpty()) return false;
+        if (original.size() == kept.size()) return true;
+        // Replace rather than removing from a possibly read-only list. Drop the parent if
+        // the filtered list cannot be installed, rather than rendering untouched children.
+        ReflectUtils.setField(owner, field, kept);
+        return ReflectUtils.getField(owner, field) == kept;
     }
 
     private static String stringField(Object row, String fieldName) {

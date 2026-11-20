@@ -346,29 +346,6 @@ public final class SmzdmLayoutPurifier {
             });
         }
 
-        // 4b. Hook HomeRecFragment (11.1.95 = t5.ViewOnClickListenerC0576A) for feed cleaning fallback
-        String[] homeRecClassNames = new String[]{
-                "com.smzdm.client.android.app.recommend.HomeRecFragment",
-                "t5.ViewOnClickListenerC0576A"
-        };
-        for (String homeRecClassName : homeRecClassNames) {
-            Class<?> homeRecFragClass = ReflectUtils.findClass(homeRecClassName, cl);
-            if (homeRecFragClass == null) continue;
-            XposedInterface.Hooker feedListHooker = chain -> {
-                Object res = chain.proceed();
-                for (int i = 0; i < 6; i++) {
-                    Object arg = chain.getArg(i);
-                    if (arg instanceof List<?>) {
-                        SmzdmAdPurifier.filterFeedRows((List<?>) arg);
-                    }
-                }
-                return res;
-            };
-            for (String m : new String[]{"D6", "J3", "Y5", "f5"}) {
-                ReflectUtils.hookAllMethods(xposed, homeRecFragClass, m, feedListHooker);
-            }
-        }
-
         // 4c. Hook search-bar keyword helpers. Base class in 11.1.95 is C5.GestureDetectorOnGestureListenerC0224n.
         String[] searchBarFragClassNames = new String[]{
                 "com.smzdm.client.android.base.BaseFragment",
